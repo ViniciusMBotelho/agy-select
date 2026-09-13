@@ -173,6 +173,8 @@ class AgSelectTUI:
         self.preview_last_width = 0
         self.preview_scroll = 0
 
+        self.panel_bounds = {}
+
         self.status_message = ""
 
         self.init_colors()
@@ -368,6 +370,14 @@ class AgSelectTUI:
         remain_h = usable_h - search_h
         local_h = max(5, remain_h // 2)
         global_h = remain_h - local_h
+
+        # Salva as regiões de cada painel para detecção de clique do mouse (y, x, h, w)
+        self.panel_bounds = {
+            self.PANEL_SEARCH: (0, 0, search_h, left_w),
+            self.PANEL_LOCAL: (search_h, 0, local_h, left_w),
+            self.PANEL_GLOBAL: (search_h + local_h, 0, global_h, left_w),
+            self.PANEL_PREVIEW: (0, left_w, usable_h, right_w),
+        }
 
         # 1. Painel Search
         self.draw_box(
@@ -624,12 +634,60 @@ class AgSelectTUI:
 
     def run(self):
         self.stdscr.keypad(True)
+        try:
+            curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+        except Exception:
+            pass
 
         while True:
             self.render()
             ch = self.stdscr.getch()
 
             if ch == -1:
+                continue
+
+            # Eventos do Mouse (clique para focar painel ou selecionar item)
+            if ch == curses.KEY_MOUSE:
+                try:
+                    _, mx, my, _, bstate = curses.getmouse()
+                    # Verifica clique com botão esquerdo ou duplo clique
+                    if bstate & (curses.BUTTON1_CLICKED | curses.BUTTON1_PRESSED | curses.BUTTON1_DOUBLE_CLICKED):
+                        for panel_id, (py, px, ph, pw) in self.panel_bounds.items():
+                            if py <= my < py + ph and px <= mx < px + pw:
+                                self.active_panel = panel_id
+                                if panel_id == self.PANEL_LOCAL:
+                                    clicked_row = my - (py + 1)
+                                    if 0 <= clicked_row < len(self.filtered_local):
+                                        self.selected_local_idx = clicked_row
+                                        self.h_offset_local = 0
+                                elif panel_id == self.PANEL_GLOBAL:
+                                    clicked_row = my - (py + 1)
+                                    if 0 <= clicked_row < len(self.filtered_global):
+                                        self.selected_global_idx = clicked_row
+                                        self.h_offset_global = 0
+                                self.update_preview()
+                                break
+                    # Suporte a Scroll do Mouse no painel focado ou no preview
+                    elif hasattr(curses, "BUTTON4_PRESSED") and (bstate & curses.BUTTON4_PRESSED):
+                        if self.active_panel == self.PANEL_PREVIEW:
+                            self.preview_scroll = max(0, self.preview_scroll - 3)
+                        elif self.active_panel == self.PANEL_LOCAL and self.selected_local_idx > 0:
+                            self.selected_local_idx -= 1
+                            self.update_preview()
+                        elif self.active_panel == self.PANEL_GLOBAL and self.selected_global_idx > 0:
+                            self.selected_global_idx -= 1
+                            self.update_preview()
+                    elif hasattr(curses, "BUTTON5_PRESSED") and (bstate & curses.BUTTON5_PRESSED):
+                        if self.active_panel == self.PANEL_PREVIEW:
+                            self.preview_scroll += 3
+                        elif self.active_panel == self.PANEL_LOCAL and self.selected_local_idx < len(self.filtered_local) - 1:
+                            self.selected_local_idx += 1
+                            self.update_preview()
+                        elif self.active_panel == self.PANEL_GLOBAL and self.selected_global_idx < len(self.filtered_global) - 1:
+                            self.selected_global_idx += 1
+                            self.update_preview()
+                except Exception:
+                    pass
                 continue
 
             # Redimensionamento dinâmico da janela do terminal
