@@ -438,7 +438,8 @@ class AgSelectTUI:
         )
 
         # 4. Painel Preview
-        preview_inner_w = max(1, right_w - 2)
+        preview_pad_x = 2
+        preview_inner_w = max(1, right_w - (preview_pad_x * 2))
         self.wrap_preview_content(preview_inner_w)
 
         self.draw_box(
@@ -451,7 +452,7 @@ class AgSelectTUI:
             f"Scroll {self.preview_scroll + 1}/{max(1, len(self.preview_wrapped_lines))}",
             is_active=(self.active_panel == self.PANEL_PREVIEW),
         )
-        self.render_preview(1, left_w + 1, usable_h - 2, preview_inner_w)
+        self.render_preview(1, left_w + preview_pad_x, usable_h - 2, preview_inner_w)
 
         # Rodapé com atalhos
         footer = " [ENTER] Continuar | [TAB / 1-4] Foco | [←/→] Rolar Título | [d] Apagar | [q / ESC] Sair "
