@@ -12,6 +12,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import textwrap
 
 BRAIN_DIR = os.path.expanduser("~/.gemini/antigravity-cli/brain")
 DB_PATH = os.path.expanduser("~/.gemini/antigravity-cli/conversation_summaries.db")
@@ -156,7 +157,6 @@ class AgSelectTUI:
         self.current_dir = current_dir
         self.active_panel = self.PANEL_LOCAL
         self.search_query = ""
-        self.search_cursor_pos = 0
 
         self.all_conversations = load_conversations(self.current_dir)
         self.filtered_local = []
@@ -164,11 +164,11 @@ class AgSelectTUI:
 
         self.selected_local_idx = 0
         self.selected_global_idx = 0
-        self.scroll_local = 0
-        self.scroll_global = 0
 
+        self.raw_messages = []
         self.preview_cache_cid = None
-        self.preview_lines = []
+        self.preview_wrapped_lines = []
+        self.preview_last_width = 0
         self.preview_scroll = 0
 
         self.status_message = ""
@@ -209,12 +209,14 @@ class AgSelectTUI:
             self.filtered_local = [
                 c
                 for c in self.all_conversations
-                if c["is_local"] and (query in c["title"].lower() or query in c["cid"].lower() or query in c["search_blob"])
+                if c["is_local"]
+                and (query in c["title"].lower() or query in c["cid"].lower() or query in c["search_blob"])
             ]
             self.filtered_global = [
                 c
                 for c in self.all_conversations
-                if not c["is_local"] and (query in c["title"].lower() or query in c["cid"].lower() or query in c["search_blob"])
+                if not c["is_local"]
+                and (query in c["title"].lower() or query in c["cid"].lower() or query in c["search_blob"])
             ]
 
         # Ajusta índices se saírem do limite
@@ -228,7 +230,7 @@ class AgSelectTUI:
         else:
             self.selected_global_idx = 0
 
-        self.update_preview()
+        self.update_preview(force_reload=True)
 
     def get_selected_conversation(self):
         if self.active_panel == self.PANEL_LOCAL:
@@ -241,36 +243,66 @@ class AgSelectTUI:
                 return self.filtered_local[self.selected_local_idx]
         return None
 
-    def update_preview(self):
+    def update_preview(self, force_reload=False):
         conv = self.get_selected_conversation()
         if not conv:
-            self.preview_lines = [("normal", "Nenhuma conversa selecionada.")]
+            self.raw_messages = []
             self.preview_cache_cid = None
+            self.preview_wrapped_lines = [("normal", "Nenhuma conversa selecionada.")]
             self.preview_scroll = 0
+            self.preview_last_width = 0
             return
 
-        if conv["cid"] == self.preview_cache_cid:
+        if not force_reload and conv["cid"] == self.preview_cache_cid:
             return
 
         self.preview_cache_cid = conv["cid"]
         self.preview_scroll = 0
-        messages = load_conversation_messages(conv["transcript_path"])
+        self.raw_messages = load_conversation_messages(conv["transcript_path"])
+        self.preview_last_width = 0  # Força re-wrap com a largura atual na renderização
 
+    def wrap_preview_content(self, width: int):
+        if width <= 2:
+            self.preview_wrapped_lines = []
+            return
+
+        if self.preview_last_width == width and self.preview_wrapped_lines:
+            return
+
+        self.preview_last_width = width
         lines = []
-        if not messages:
+
+        if not self.raw_messages:
             lines.append(("normal", "Nenhuma mensagem encontrada neste histórico."))
         else:
-            for role, content in messages:
+            for role, content in self.raw_messages:
                 if role == "user":
                     lines.append(("user_hdr", "👤 User:"))
                 else:
                     lines.append(("ai_hdr", "🤖 AI:"))
 
-                for subline in content.split("\n"):
-                    lines.append(("body", subline))
+                for raw_line in content.split("\n"):
+                    if not raw_line:
+                        lines.append(("body", ""))
+                        continue
+
+                    # Quebra o texto responsivamente respeitando a largura do painel
+                    wrapped = textwrap.wrap(
+                        raw_line,
+                        width=width,
+                        break_long_words=True,
+                        break_on_hyphens=False,
+                        replace_whitespace=False,
+                    )
+                    if not wrapped:
+                        lines.append(("body", ""))
+                    else:
+                        for w in wrapped:
+                            lines.append(("body", w))
+
                 lines.append(("blank", ""))
 
-        self.preview_lines = lines
+        self.preview_wrapped_lines = lines
 
     def draw_box(self, y, x, h, w, title_number, title_name, item_count_str="", is_active=False):
         if h < 2 or w < 2:
@@ -324,10 +356,9 @@ class AgSelectTUI:
             return
 
         # Layout estilo lazygit
-        # Coluna da esquerda: 45% da tela; Coluna da direita (Preview): 55% da tela
         left_w = int(max_x * 0.45)
         right_w = max_x - left_w
-        usable_h = max_y - 2  # 2 linhas no rodapé para atalhos
+        usable_h = max_y - 2
 
         search_h = 3
         remain_h = usable_h - search_h
@@ -347,7 +378,12 @@ class AgSelectTUI:
         )
         search_prompt = "> " + self.search_query
         try:
-            self.stdscr.addstr(1, 2, search_prompt[: left_w - 4], curses.color_pair(1 if self.active_panel == self.PANEL_SEARCH else 2))
+            self.stdscr.addstr(
+                1,
+                2,
+                search_prompt[: left_w - 4],
+                curses.color_pair(1 if self.active_panel == self.PANEL_SEARCH else 2),
+            )
         except curses.error:
             pass
 
@@ -396,6 +432,9 @@ class AgSelectTUI:
         )
 
         # 4. Painel Preview
+        preview_inner_w = max(1, right_w - 2)
+        self.wrap_preview_content(preview_inner_w)
+
         self.draw_box(
             0,
             left_w,
@@ -403,10 +442,10 @@ class AgSelectTUI:
             right_w,
             4,
             "Preview",
-            f"Scroll {self.preview_scroll + 1}/{max(1, len(self.preview_lines))}",
+            f"Scroll {self.preview_scroll + 1}/{max(1, len(self.preview_wrapped_lines))}",
             is_active=(self.active_panel == self.PANEL_PREVIEW),
         )
-        self.render_preview(1, left_w + 1, usable_h - 2, right_w - 2)
+        self.render_preview(1, left_w + 1, usable_h - 2, preview_inner_w)
 
         # Rodapé com atalhos
         footer = " [ENTER] Continuar | [TAB / 1-4] Foco | [d] Apagar | [q / ESC] Sair "
@@ -417,7 +456,7 @@ class AgSelectTUI:
         except curses.error:
             pass
 
-        # Mostra o cursor apenas no campo de busca se ativo
+        # Cursor apenas no campo de busca se ativo
         if self.active_panel == self.PANEL_SEARCH:
             curses.curs_set(1)
             cursor_x = min(left_w - 2, 2 + len(search_prompt))
@@ -442,7 +481,6 @@ class AgSelectTUI:
                 pass
             return
 
-        # Ajuste de rolagem simples
         scroll = 0
         if selected_idx >= height:
             scroll = selected_idx - height + 1
@@ -453,7 +491,7 @@ class AgSelectTUI:
                 break
 
             conv = items[item_idx]
-            is_sel = (item_idx == selected_idx)
+            is_sel = item_idx == selected_idx
 
             marker = "* " if is_sel else "  "
             cid_short = conv["cid"][:8]
@@ -474,26 +512,24 @@ class AgSelectTUI:
                 pass
 
     def render_preview(self, y_start, x_start, height, width):
-        if height <= 0 or width <= 0 or not self.preview_lines:
+        if height <= 0 or width <= 0 or not self.preview_wrapped_lines:
             return
 
-        # Garante limite do scroll
-        max_scroll = max(0, len(self.preview_lines) - height)
+        max_scroll = max(0, len(self.preview_wrapped_lines) - height)
         self.preview_scroll = max(0, min(self.preview_scroll, max_scroll))
 
         for i in range(height):
             line_idx = self.preview_scroll + i
-            if line_idx >= len(self.preview_lines):
+            if line_idx >= len(self.preview_wrapped_lines):
                 break
 
-            style, text = self.preview_lines[line_idx]
+            style, text = self.preview_wrapped_lines[line_idx]
             attr = curses.color_pair(2)
             if style == "user_hdr":
                 attr = curses.color_pair(4) | curses.A_BOLD
             elif style == "ai_hdr":
                 attr = curses.color_pair(5) | curses.A_BOLD
 
-            # Quebra ou trunca
             disp_text = text[:width].ljust(width)
             try:
                 self.stdscr.addstr(y_start + i, x_start, disp_text, attr)
@@ -514,7 +550,6 @@ class AgSelectTUI:
 
         while True:
             win.erase()
-            # Borda do diálogo
             win.box()
             win.addstr(0, 2, f" {title} ", curses.color_pair(8) | curses.A_BOLD)
             win.addstr(2, 4, question[: w - 8], curses.color_pair(2))
@@ -550,7 +585,6 @@ class AgSelectTUI:
             try:
                 if os.path.exists(conv["cpath"]):
                     shutil.rmtree(conv["cpath"])
-                # Remove do banco se sqlite existir
                 if os.path.exists(DB_PATH):
                     conn = sqlite3.connect(DB_PATH)
                     cur = conn.cursor()
@@ -572,6 +606,11 @@ class AgSelectTUI:
             ch = self.stdscr.getch()
 
             if ch == -1:
+                continue
+
+            # Redimensionamento dinâmico da janela do terminal
+            if ch == curses.KEY_RESIZE:
+                self.preview_last_width = 0  # Re-wrap com nova largura
                 continue
 
             # Tecla ESC ou 'q' (quando não estiver digitando na busca)
@@ -608,7 +647,6 @@ class AgSelectTUI:
             # Tecla ENTER para escolher a conversa
             if ch in (ord("\n"), curses.KEY_ENTER):
                 if self.active_panel == self.PANEL_SEARCH:
-                    # Desce para a lista local ou global
                     self.active_panel = self.PANEL_LOCAL if self.filtered_local else self.PANEL_GLOBAL
                     self.update_preview()
                     continue
