@@ -164,6 +164,8 @@ class AgSelectTUI:
 
         self.selected_local_idx = 0
         self.selected_global_idx = 0
+        self.h_offset_local = 0
+        self.h_offset_global = 0
 
         self.raw_messages = []
         self.preview_cache_cid = None
@@ -230,6 +232,9 @@ class AgSelectTUI:
         else:
             self.selected_global_idx = 0
 
+        self.h_offset_local = 0
+        self.h_offset_global = 0
+
         self.update_preview(force_reload=True)
 
     def get_selected_conversation(self):
@@ -259,7 +264,7 @@ class AgSelectTUI:
         self.preview_cache_cid = conv["cid"]
         self.preview_scroll = 0
         self.raw_messages = load_conversation_messages(conv["transcript_path"])
-        self.preview_last_width = 0  # Força re-wrap com a largura atual na renderização
+        self.preview_last_width = 0
 
     def wrap_preview_content(self, width: int):
         if width <= 2:
@@ -286,7 +291,6 @@ class AgSelectTUI:
                         lines.append(("body", ""))
                         continue
 
-                    # Quebra o texto responsivamente respeitando a largura do painel
                     wrapped = textwrap.wrap(
                         raw_line,
                         width=width,
@@ -355,8 +359,8 @@ class AgSelectTUI:
             self.stdscr.refresh()
             return
 
-        # Layout estilo lazygit
-        left_w = int(max_x * 0.45)
+        # Layout responsivo: proporção de 45% esquerda / 55% direita (com mínimo de 35 colunas na esquerda)
+        left_w = max(35, min(int(max_x * 0.45), max_x - 30))
         right_w = max_x - left_w
         usable_h = max_y - 2
 
@@ -406,6 +410,7 @@ class AgSelectTUI:
             width=left_w - 2,
             items=self.filtered_local,
             selected_idx=self.selected_local_idx,
+            h_offset=self.h_offset_local,
             is_active=(self.active_panel == self.PANEL_LOCAL),
         )
 
@@ -428,6 +433,7 @@ class AgSelectTUI:
             width=left_w - 2,
             items=self.filtered_global,
             selected_idx=self.selected_global_idx,
+            h_offset=self.h_offset_global,
             is_active=(self.active_panel == self.PANEL_GLOBAL),
         )
 
@@ -448,7 +454,7 @@ class AgSelectTUI:
         self.render_preview(1, left_w + 1, usable_h - 2, preview_inner_w)
 
         # Rodapé com atalhos
-        footer = " [ENTER] Continuar | [TAB / 1-4] Foco | [d] Apagar | [q / ESC] Sair "
+        footer = " [ENTER] Continuar | [TAB / 1-4] Foco | [←/→] Rolar Título | [d] Apagar | [q / ESC] Sair "
         if self.status_message:
             footer = f" {self.status_message} "
         try:
@@ -469,7 +475,7 @@ class AgSelectTUI:
 
         self.stdscr.refresh()
 
-    def render_list(self, y_start, x_start, height, width, items, selected_idx, is_active):
+    def render_list(self, y_start, x_start, height, width, items, selected_idx, h_offset, is_active):
         if height <= 0 or width <= 0:
             return
 
@@ -495,9 +501,26 @@ class AgSelectTUI:
 
             marker = "* " if is_sel else "  "
             cid_short = conv["cid"][:8]
-            title = conv["title"].replace("\t", " ").strip()
-            line_txt = f"{marker}{cid_short} {title}"
-            line_txt = line_txt.ljust(width)[:width]
+            raw_title = conv["title"].replace("\t", " ").strip()
+
+            prefix = f"{marker}{cid_short} "
+            prefix_len = len(prefix)
+
+            # Responsividade horizontal: título com rolagem horizontal no item selecionado e elipse
+            if width <= prefix_len:
+                line_txt = prefix[:width].ljust(width)
+            else:
+                title_area_w = width - prefix_len
+                # Aplica offset horizontal apenas no item selecionado
+                effective_offset = h_offset if is_sel else 0
+                sliced_title = raw_title[effective_offset:]
+
+                if len(sliced_title) > title_area_w and title_area_w > 3:
+                    disp_title = sliced_title[: title_area_w - 1] + "…"
+                else:
+                    disp_title = sliced_title[:title_area_w]
+
+                line_txt = (prefix + disp_title).ljust(width)[:width]
 
             attr = curses.color_pair(2)
             if is_sel:
@@ -610,7 +633,7 @@ class AgSelectTUI:
 
             # Redimensionamento dinâmico da janela do terminal
             if ch == curses.KEY_RESIZE:
-                self.preview_last_width = 0  # Re-wrap com nova largura
+                self.preview_last_width = 0
                 continue
 
             # Tecla ESC ou 'q' (quando não estiver digitando na busca)
@@ -676,11 +699,17 @@ class AgSelectTUI:
                 if ch in (curses.KEY_UP, ord("k")):
                     if self.selected_local_idx > 0:
                         self.selected_local_idx -= 1
+                        self.h_offset_local = 0
                         self.update_preview()
                 elif ch in (curses.KEY_DOWN, ord("j")):
                     if self.selected_local_idx < len(self.filtered_local) - 1:
                         self.selected_local_idx += 1
+                        self.h_offset_local = 0
                         self.update_preview()
+                elif ch in (curses.KEY_RIGHT, ord("l")):
+                    self.h_offset_local += 5
+                elif ch in (curses.KEY_LEFT, ord("h")):
+                    self.h_offset_local = max(0, self.h_offset_local - 5)
                 elif ch == ord("/"):
                     self.active_panel = self.PANEL_SEARCH
 
@@ -688,11 +717,17 @@ class AgSelectTUI:
                 if ch in (curses.KEY_UP, ord("k")):
                     if self.selected_global_idx > 0:
                         self.selected_global_idx -= 1
+                        self.h_offset_global = 0
                         self.update_preview()
                 elif ch in (curses.KEY_DOWN, ord("j")):
                     if self.selected_global_idx < len(self.filtered_global) - 1:
                         self.selected_global_idx += 1
+                        self.h_offset_global = 0
                         self.update_preview()
+                elif ch in (curses.KEY_RIGHT, ord("l")):
+                    self.h_offset_global += 5
+                elif ch in (curses.KEY_LEFT, ord("h")):
+                    self.h_offset_global = max(0, self.h_offset_global - 5)
                 elif ch == ord("/"):
                     self.active_panel = self.PANEL_SEARCH
 
