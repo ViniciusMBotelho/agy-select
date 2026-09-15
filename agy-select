@@ -208,6 +208,10 @@ class AgSelectTUI:
         curses.init_pair(7, curses.COLOR_GREEN, -1)
         # 8: Status/Erro
         curses.init_pair(8, curses.COLOR_RED, -1)
+        # 9: Balão Usuário (Bordas Ciano)
+        curses.init_pair(9, curses.COLOR_CYAN, -1)
+        # 10: Balão IA (Bordas Verde)
+        curses.init_pair(10, curses.COLOR_GREEN, -1)
 
     def apply_filter(self):
         query = self.search_query.strip().lower()
@@ -280,7 +284,7 @@ class AgSelectTUI:
         self.preview_last_width = 0
 
     def wrap_preview_content(self, width: int):
-        if width <= 2:
+        if width <= 4:
             self.preview_wrapped_lines = []
             return
 
@@ -293,29 +297,39 @@ class AgSelectTUI:
         if not self.raw_messages:
             lines.append(("normal", "Nenhuma mensagem encontrada neste histórico."))
         else:
+            bubble_inner_w = width - 4
             for role, content in self.raw_messages:
-                if role == "user":
-                    lines.append(("user_hdr", "👤 User:"))
-                else:
-                    lines.append(("ai_hdr", "🤖 AI:"))
-
-                for raw_line in content.split("\n"):
+                content_lines = content.split("\n")
+                wrapped_body = []
+                for raw_line in content_lines:
                     if not raw_line:
-                        lines.append(("body", ""))
+                        wrapped_body.append("")
                         continue
 
                     wrapped = textwrap.wrap(
                         raw_line,
-                        width=width,
+                        width=bubble_inner_w,
                         break_long_words=True,
                         break_on_hyphens=False,
                         replace_whitespace=False,
                     )
                     if not wrapped:
-                        lines.append(("body", ""))
+                        wrapped_body.append("")
                     else:
-                        for w in wrapped:
-                            lines.append(("body", w))
+                        wrapped_body.extend(wrapped)
+
+                if role == "user":
+                    lines.append(("user_top", "╭─ " + "─" * (bubble_inner_w) + "╮"))
+                    for w in wrapped_body:
+                        padded = w.ljust(bubble_inner_w)
+                        lines.append(("user_body", f"│  {padded} │"))
+                    lines.append(("user_bot", "╰─ " + "─" * (bubble_inner_w) + "╯"))
+                else:
+                    lines.append(("ai_top", "╭─ " + "─" * (bubble_inner_w) + "╮"))
+                    for w in wrapped_body:
+                        padded = w.ljust(bubble_inner_w)
+                        lines.append(("ai_body", f"│  {padded} │"))
+                    lines.append(("ai_bot", "╰─ " + "─" * (bubble_inner_w) + "╯"))
 
                 lines.append(("blank", ""))
 
@@ -570,15 +584,31 @@ class AgSelectTUI:
                 break
 
             style, text = self.preview_wrapped_lines[line_idx]
-            attr = curses.color_pair(2)
-            if style == "user_hdr":
-                attr = curses.color_pair(4) | curses.A_BOLD
-            elif style == "ai_hdr":
-                attr = curses.color_pair(5) | curses.A_BOLD
-
             disp_text = text[:width].ljust(width)
+
             try:
-                self.stdscr.addstr(y_start + i, x_start, disp_text, attr)
+                if style in ("user_top", "user_bot"):
+                    self.stdscr.addstr(y_start + i, x_start, disp_text, curses.color_pair(4) | curses.A_BOLD)
+                elif style in ("ai_top", "ai_bot"):
+                    self.stdscr.addstr(y_start + i, x_start, disp_text, curses.color_pair(5) | curses.A_BOLD)
+                elif style == "user_body":
+                    border_color = curses.color_pair(4) | curses.A_BOLD
+                    text_color = curses.color_pair(2)
+                    self.stdscr.addstr(y_start + i, x_start, "│", border_color)
+                    if width > 2:
+                        body_txt = disp_text[1:-1]
+                        self.stdscr.addstr(y_start + i, x_start + 1, body_txt[: width - 2], text_color)
+                        self.stdscr.addstr(y_start + i, x_start + width - 1, "│", border_color)
+                elif style == "ai_body":
+                    border_color = curses.color_pair(5) | curses.A_BOLD
+                    text_color = curses.color_pair(2)
+                    self.stdscr.addstr(y_start + i, x_start, "│", border_color)
+                    if width > 2:
+                        body_txt = disp_text[1:-1]
+                        self.stdscr.addstr(y_start + i, x_start + 1, body_txt[: width - 2], text_color)
+                        self.stdscr.addstr(y_start + i, x_start + width - 1, "│", border_color)
+                else:
+                    self.stdscr.addstr(y_start + i, x_start, disp_text, curses.color_pair(2))
             except curses.error:
                 pass
 
