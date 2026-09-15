@@ -709,25 +709,46 @@ class AgSelectTUI:
                                         self.h_offset_global = 0
                                 self.update_preview()
                                 break
-                    # Suporte a Scroll do Mouse no painel focado ou no preview
+                    # Suporte a Scroll do Mouse baseado na posição onde o cursor do mouse está
                     elif hasattr(curses, "BUTTON4_PRESSED") and (bstate & curses.BUTTON4_PRESSED):
-                        if self.active_panel == self.PANEL_PREVIEW:
+                        hovered_panel = None
+                        for panel_id, (py, px, ph, pw) in self.panel_bounds.items():
+                            if py <= my < py + ph and px <= mx < px + pw:
+                                hovered_panel = panel_id
+                                break
+
+                        if hovered_panel == self.PANEL_PREVIEW or (hovered_panel is None and self.active_panel == self.PANEL_PREVIEW):
                             self.preview_scroll = max(0, self.preview_scroll - 3)
-                        elif self.active_panel == self.PANEL_LOCAL and self.selected_local_idx > 0:
-                            self.selected_local_idx -= 1
-                            self.update_preview()
-                        elif self.active_panel == self.PANEL_GLOBAL and self.selected_global_idx > 0:
-                            self.selected_global_idx -= 1
-                            self.update_preview()
+                        elif hovered_panel == self.PANEL_LOCAL:
+                            if self.selected_local_idx > 0:
+                                self.selected_local_idx -= 1
+                                self.h_offset_local = 0
+                                self.update_preview()
+                        elif hovered_panel == self.PANEL_GLOBAL:
+                            if self.selected_global_idx > 0:
+                                self.selected_global_idx -= 1
+                                self.h_offset_global = 0
+                                self.update_preview()
+
                     elif hasattr(curses, "BUTTON5_PRESSED") and (bstate & curses.BUTTON5_PRESSED):
-                        if self.active_panel == self.PANEL_PREVIEW:
+                        hovered_panel = None
+                        for panel_id, (py, px, ph, pw) in self.panel_bounds.items():
+                            if py <= my < py + ph and px <= mx < px + pw:
+                                hovered_panel = panel_id
+                                break
+
+                        if hovered_panel == self.PANEL_PREVIEW or (hovered_panel is None and self.active_panel == self.PANEL_PREVIEW):
                             self.preview_scroll += 3
-                        elif self.active_panel == self.PANEL_LOCAL and self.selected_local_idx < len(self.filtered_local) - 1:
-                            self.selected_local_idx += 1
-                            self.update_preview()
-                        elif self.active_panel == self.PANEL_GLOBAL and self.selected_global_idx < len(self.filtered_global) - 1:
-                            self.selected_global_idx += 1
-                            self.update_preview()
+                        elif hovered_panel == self.PANEL_LOCAL:
+                            if self.selected_local_idx < len(self.filtered_local) - 1:
+                                self.selected_local_idx += 1
+                                self.h_offset_local = 0
+                                self.update_preview()
+                        elif hovered_panel == self.PANEL_GLOBAL:
+                            if self.selected_global_idx < len(self.filtered_global) - 1:
+                                self.selected_global_idx += 1
+                                self.h_offset_global = 0
+                                self.update_preview()
                 except Exception:
                     pass
                 continue
