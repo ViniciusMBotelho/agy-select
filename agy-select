@@ -124,8 +124,9 @@ def load_conversations(current_dir: str):
 
 def load_conversation_messages(transcript_path: str):
     messages = []
+    total_chars = 0
     if not os.path.exists(transcript_path):
-        return messages
+        return messages, 0
 
     try:
         with open(transcript_path, "r", encoding="utf-8", errors="ignore") as fh:
@@ -135,6 +136,8 @@ def load_conversation_messages(transcript_path: str):
                     m_type = data.get("type")
                     src = data.get("source")
                     content = data.get("content")
+                    if content:
+                        total_chars += len(str(content))
                     if m_type == "USER_INPUT" and content:
                         messages.append(("user", clean_preview(content)))
                     elif m_type == "PLANNER_RESPONSE" and src == "MODEL" and content:
@@ -143,7 +146,7 @@ def load_conversation_messages(transcript_path: str):
                     pass
     except Exception:
         pass
-    return messages
+    return messages, total_chars
 
 
 class AgSelectTUI:
@@ -169,6 +172,8 @@ class AgSelectTUI:
 
         self.raw_messages = []
         self.preview_cache_cid = None
+        self.preview_est_tokens = 0
+        self.preview_est_pct = 0.0
         self.preview_wrapped_lines = []
         self.preview_last_width = 0
         self.preview_scroll = 0
@@ -255,6 +260,8 @@ class AgSelectTUI:
         if not conv:
             self.raw_messages = []
             self.preview_cache_cid = None
+            self.preview_est_tokens = 0
+            self.preview_est_pct = 0.0
             self.preview_wrapped_lines = [("normal", "Nenhuma conversa selecionada.")]
             self.preview_scroll = 0
             self.preview_last_width = 0
@@ -265,7 +272,11 @@ class AgSelectTUI:
 
         self.preview_cache_cid = conv["cid"]
         self.preview_scroll = 0
-        self.raw_messages = load_conversation_messages(conv["transcript_path"])
+        self.raw_messages, total_chars = load_conversation_messages(conv["transcript_path"])
+        # Estimativa de tokens Gemini: ~3.8 caracteres por token
+        # Base de janela de contexto do agy: 1.000.000 (1M)
+        self.preview_est_tokens = int(total_chars / 3.8)
+        self.preview_est_pct = min(100.0, (self.preview_est_tokens / 1_000_000.0) * 100.0)
         self.preview_last_width = 0
 
     def wrap_preview_content(self, width: int):
@@ -452,13 +463,14 @@ class AgSelectTUI:
         preview_inner_w = max(1, right_w - (preview_pad_x * 2))
         self.wrap_preview_content(preview_inner_w)
 
+        preview_title = f"Preview (~{self.preview_est_pct:.1f}% Context)"
         self.draw_box(
             0,
             left_w,
             usable_h,
             right_w,
             4,
-            "Preview",
+            preview_title,
             f"Scroll {self.preview_scroll + 1}/{max(1, len(self.preview_wrapped_lines))}",
             is_active=(self.active_panel == self.PANEL_PREVIEW),
         )
